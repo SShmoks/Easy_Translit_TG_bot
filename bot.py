@@ -8,8 +8,10 @@ import re
 import time
 import logging
 import requests
+import threading
 from dotenv import load_dotenv
 from datetime import datetime, timezone, timedelta
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # NLTK для обработки естественного языка
 import nltk
@@ -36,27 +38,53 @@ except LookupError:
 
 RUSSIAN_STOPWORDS = set(stopwords.words('russian'))
 
-# Ключевые слова для распознавания времени
+# ===== КЛЮЧЕВЫЕ СЛОВА =====
 TIME_KEYWORDS = {
     'время', 'time', 'часы', 'сколько', 'который', 'час', 'current time',
     'времени', 'часов', 'минут', 'секунд', 'покажи', 'скажи', 'подскажи',
     'минуты', 'секунды'
 }
-
-# Ключевые слова благодарности
 THANK_KEYWORDS = {'спасибо', 'благодарю', 'спс', 'отлично', 'хорошо'}
-
-# Ключевые слова для запроса выхода / переключения
 EXIT_KEYWORDS = {
     'выход', 'выйти', 'прекрати', 'прекратить', 'закрыть',
     'транслит', 'транслитерация', 'транслитерации',
     'стоп', 'stop', 'exit'
 }
 
-# Московский часовой пояс (UTC+3)
 MOSCOW_TZ = timezone(timedelta(hours=3))
 
+# ========================================
+# 1. ЗАГЛУШКА ДЛЯ RENDER (Web Service)
+# ========================================
+class HealthHandler(BaseHTTPRequestHandler):
+    """Обрабатывает запросы к health-эндпоинту."""
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is running")
 
+def run_health_server():
+    """Запускает простой HTTP-сервер для Render."""
+    server = HTTPServer(('0.0.0.0', 10000), HealthHandler)
+    server.serve_forever()
+
+# ========================================
+# 2. ФУНКЦИЯ АВТО-ПИНГА (Self-Ping)
+# ========================================
+def keep_alive():
+    """Раз в 10 минут делает запрос к самому себе, чтобы не уснуть."""
+    while True:
+        time.sleep(600)  # 10 минут
+        try:
+            # Отправляем запрос к своему health-эндпоинту
+            requests.get('http://localhost:10000', timeout=10)
+            log.info("Self-ping: бот активен")
+        except Exception as e:
+            log.warning("Ошибка self-ping: %s", e)
+
+# ========================================
+# 3. NLP ФУНКЦИИ
+# ========================================
 def detect_time_intent(text: str) -> bool:
     """Проверяет, спрашивает ли пользователь про время."""
     text_lower = text.lower()
@@ -87,8 +115,9 @@ def get_moscow_time() -> str:
     now = datetime.now(MOSCOW_TZ).strftime("%H:%M:%S")
     return f"Текущее время в Москве (GMT+3): {now}"
 
-
-# ---------- Транслитерация ----------
+# ========================================
+# 4. ТРАНСЛИТЕРАЦИЯ
+# ========================================
 BASE_MAP = {
     "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "yo",
     "ж": "zh", "з": "z", "и": "i", "й": "y", "к": "k", "л": "l", "м": "m",
@@ -121,8 +150,9 @@ def translit_text(text: str) -> str:
     lines = [l for l in text.splitlines() if l.strip()]
     return "\n".join(translit_line(l) for l in lines)
 
-
-# ---------- Работа с Telegram API ----------
+# ========================================
+# 5. ОБРАБОТЧИК TELEGRAM
+# ========================================
 def tg(method: str, **kwargs) -> dict:
     for attempt in range(3):
         try:
@@ -187,26 +217,19 @@ def handle(update: dict) -> None:
 
     # Если включён NLP-режим
     if chat_id in nlp_active_chats:
-        # Проверяем запрос времени
         if detect_time_intent(text):
             tg("sendMessage", chat_id=chat_id, text=get_moscow_time(), reply_to_message_id=reply_to)
             return
-
-        # Проверяем благодарность
         if detect_thanks(text):
             tg("sendMessage", chat_id=chat_id,
                text="Рад помочь! Если нужно актуализировать данные, спросите ещё раз.",
                reply_to_message_id=reply_to)
             return
-
-        # Проверяем запрос выхода/переключения
         if detect_exit_request(text):
             tg("sendMessage", chat_id=chat_id,
                text="Для выхода из этого режима, введите команду /stop_nlp\nДля возвращения в режим транслита, введите команду /start",
                reply_to_message_id=reply_to)
             return
-
-        # Не распознано
         tg("sendMessage", chat_id=chat_id,
            text="Извините, не понял ваш вопрос. Я могу помочь вам узнать текущее время.\nУточните пожалуйста, что вас интересует?",
            reply_to_message_id=reply_to)
@@ -229,8 +252,9 @@ def handle(update: dict) -> None:
         log.error("Ошибка транслитерации: %s", e, exc_info=True)
         tg("sendMessage", chat_id=chat_id, text=f" {e}", reply_to_message_id=reply_to)
 
-
-# ---------- Запуск бота ----------
+# ========================================
+# 6. ЗАПУСК
+# ========================================
 def get_start_offset() -> int:
     data = tg("getUpdates", offset=-1, timeout=0)
     results = data.get("result", [])
@@ -251,23 +275,10 @@ def poll() -> None:
             log.error("Ошибка polling: %s", e)
             time.sleep(5)
 
-# Заглушка для Render Web Service
-# Бот работает через long polling, но Render требует открытый порт.
-# Этот маленький сервер отвечает на запросы, чтобы порт был открыт.
-import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
-
-class HealthHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"Bot is running")
-
-def run_health_server():
-    server = HTTPServer(('0.0.0.0', 10000), HealthHandler)
-    server.serve_forever()
-
-# Запускаем health-сервер в отдельном потоке
-threading.Thread(target=run_health_server, daemon=True).start()
 if __name__ == "__main__":
+    # Запускаем health-сервер для Render
+    threading.Thread(target=run_health_server, daemon=True).start()
+    # Запускаем self-ping, чтобы бот не засыпал
+    threading.Thread(target=keep_alive, daemon=True).start()
+    # Запускаем основной цикл бота
     poll()
