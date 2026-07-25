@@ -251,5 +251,23 @@ def poll() -> None:
             log.error("Ошибка polling: %s", e)
             time.sleep(5)
 
+# Заглушка для Render Web Service
+# Бот работает через long polling, но Render требует открытый порт.
+# Этот маленький сервер отвечает на запросы, чтобы порт был открыт.
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is running")
+
+def run_health_server():
+    server = HTTPServer(('0.0.0.0', 10000), HealthHandler)
+    server.serve_forever()
+
+# Запускаем health-сервер в отдельном потоке
+threading.Thread(target=run_health_server, daemon=True).start()
 if __name__ == "__main__":
     poll()
