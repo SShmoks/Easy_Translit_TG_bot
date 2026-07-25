@@ -1,14 +1,11 @@
 """
 Telegram-бот для транслитерации с модулем распознавания времени на NLTK.
 
-Бот предназначен для преобразования русскоязычного текста в латиницу
-и распознавания запросов о времени с помощью библиотеки NLTK.
-
 Команды:
-/start          - включить режим транслитерации
-/stop           - выключить режим транслитерации
-/start_nlp      - включить NLP-режим (скрытая команда для проверяющего)
-/stop_nlp       - выключить NLP-режим
+/start          - включить режим транслитерации (выключает NLP)
+/stop           - выключить режим транслитерации (работает только в режиме транслита)
+/start_nlp      - включить NLP-режим (выключает транслитерацию)
+/stop_nlp       - выключить NLP-режим (работает только в режиме NLP)
 """
 
 import os
@@ -262,15 +259,23 @@ def handle(update: dict) -> None:
         )
         return
 
-    # /stop - выключает транслитерацию, но не влияет на NLP
+    # /stop - выключает транслитерацию, только если она была включена
     if text == "/stop":
-        active_chats.discard(chat_id)
-        tg(
-            "sendMessage",
-            chat_id=chat_id,
-            text="Остановил транслитерацию.",
-            reply_to_message_id=reply_to
-        )
+        if chat_id in active_chats:
+            active_chats.discard(chat_id)
+            tg(
+                "sendMessage",
+                chat_id=chat_id,
+                text="Остановил транслитерацию.",
+                reply_to_message_id=reply_to
+            )
+        else:
+            tg(
+                "sendMessage",
+                chat_id=chat_id,
+                text="Режим транслитерации не был активен.",
+                reply_to_message_id=reply_to
+            )
         return
 
     # /start_nlp - включает NLP и выключает транслитерацию, если она была включена
@@ -291,15 +296,23 @@ def handle(update: dict) -> None:
         )
         return
 
-    # /stop_nlp - выключает NLP, но не влияет на транслитерацию
+    # /stop_nlp - выключает NLP, только если он был включён
     if text == "/stop_nlp":
-        nlp_active_chats.discard(chat_id)
-        tg(
-            "sendMessage",
-            chat_id=chat_id,
-            text="NLP-режим выключен.",
-            reply_to_message_id=reply_to
-        )
+        if chat_id in nlp_active_chats:
+            nlp_active_chats.discard(chat_id)
+            tg(
+                "sendMessage",
+                chat_id=chat_id,
+                text="NLP-режим выключен.",
+                reply_to_message_id=reply_to
+            )
+        else:
+            tg(
+                "sendMessage",
+                chat_id=chat_id,
+                text="NLP-режим не был активен.",
+                reply_to_message_id=reply_to
+            )
         return
 
     # Любая неизвестная команда игнорируется
