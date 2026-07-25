@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Секреты
+tokendata.env
+.env
+
+# IDE
+.idea/
+.vscode/
